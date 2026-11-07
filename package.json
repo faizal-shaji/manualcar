@@ -1,0 +1,48 @@
+{
+  "name": "manualcar",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Manual Car: a browser game where the car drives itself and you only change gear. Made for GitHub Game Off 2026.",
+  "author": "Faizal Shaji",
+  "license": "UNLICENSED",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/faizal-shaji/manualcar.git"
+  },
+  "type": "module",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc --noEmit && vite build",
+    "preview": "vite preview",
+    "typecheck": "tsc --noEmit && tsc --noEmit -p tsconfig.node.json",
+    "lint": "eslint . && prettier --check .",
+    "format": "prettier --write .",
+    "test": "vitest run",
+    "test:e2e": "playwright test",
+    "tune": "tsx scripts/tune.ts",
+    "itch-art": "tsx scripts/itch-art.ts",
+    "zip": "npm run build && python scripts/zip-itch.py dist manualcar-itch.zip"
+  },
+  "dependencies": {
+    "phaser": "3.90.0"
+  },
+  "devDependencies": {
+    "@eslint/js": "^10.0.1",
+    "@playwright/test": "^1.63.0",
+    "@types/node": "^22.20.5",
+    "eslint": "^10.12.0",
+    "globals": "^17.13.0",
+    "prettier": "^3.9.9",
+    "tsx": "^4.23.15",
+    "typescript": "5.9.3",
+    "typescript-eslint": "^8.71.0",
+    "vite": "7.3.7",
+    "vitest": "^5.0.3"
+  },
+  "allowScripts": {
+    "esbuild": true
+  }
+}
