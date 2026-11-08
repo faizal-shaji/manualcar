@@ -13,6 +13,9 @@ export const GATE_SLOTS: [number, number][] = [
   [70, -64],
 ];
 
+/** How a gear is written: its number, or N for neutral. */
+export const gearLabel = (gear: number) => (gear ? String(gear) : 'N');
+
 /** Needle angle for an engine speed: from the bottom left, clockwise round to the bottom right. */
 export function dialAngle(rpm: number) {
   return Phaser.Math.DegToRad(135 + (Phaser.Math.Clamp(rpm, 0, DIAL_MAX_RPM) / DIAL_MAX_RPM) * 270);
@@ -50,6 +53,22 @@ export function drawRevCounter(scene: Phaser.Scene, x: number, y: number, radius
   return parts;
 }
 
+/**
+ * Draws the box of the gear display beside the rev counter (the gear is a text on top) and returns
+ * what it created.
+ */
+export function drawGearDisplay(scene: Phaser.Scene, x: number, y: number) {
+  const g = scene.add.graphics();
+  drawPanel(g, x, y, 100, 128, COLORS.dial, 24);
+  const caption = scene.add.text(x, y - 44, 'GEAR', textStyle(15, TEXT.dim)).setOrigin(0.5);
+  return [g, caption];
+}
+
+/** The gear in the gear display, centred at (x, y) of its box. */
+export function gearNumber(scene: Phaser.Scene, x: number, y: number, gear: number) {
+  return scene.add.text(x, y + 12, gearLabel(gear), textStyle(84, TEXT.white)).setOrigin(0.5);
+}
+
 /** Draws the gear stick's panel and gear numbers (without the knob) and returns what it created. */
 export function drawGearGate(scene: Phaser.Scene, x: number, y: number) {
   const g = scene.add.graphics();
@@ -82,14 +101,15 @@ export class GearKnob extends Phaser.GameObjects.Container {
   }
 
   setGear(gear: number) {
-    this.label.setText(gear ? String(gear) : 'N');
+    this.label.setText(gearLabel(gear));
     return this;
   }
 }
 
 const DIAL = { x: 150, y: 588, radius: 104 };
+const GEAR_DISPLAY = { x: 330, y: 590 };
 const GATE = { x: 1130, y: 590 };
-const THERMOMETER = { x: 292, top: 504, height: 120 };
+const THERMOMETER = { x: 426, top: 504, height: 120 };
 const PROGRESS_Y = 86;
 const PROGRESS_HALF_WIDTH = 200;
 
@@ -105,6 +125,8 @@ export interface DashboardOptions {
 export interface DashboardReading {
   rpm: number;
   atLimiter: boolean;
+  /** From 0 to 1: the engine labours in too high a gear. */
+  judder: number;
   kmh: number;
   heat: number;
   timeLeft: number;
@@ -118,6 +140,8 @@ export class Dashboard {
   shownGear = 0;
   private readonly needle: Phaser.GameObjects.Image;
   private readonly speed: Phaser.GameObjects.Text;
+  private readonly gear: Phaser.GameObjects.Text;
+  private gearColor: string = TEXT.white;
   private readonly thermometer: Phaser.GameObjects.Graphics;
   private readonly clock: Phaser.GameObjects.Text;
   private readonly marker: Phaser.GameObjects.Graphics;
@@ -141,6 +165,10 @@ export class Dashboard {
     cap.fillCircle(x, y, 12);
     cap.lineStyle(3, COLORS.outline, 1);
     cap.strokeCircle(x, y, 12);
+
+    const { x: gearX, y: gearY } = GEAR_DISPLAY;
+    for (const part of drawGearDisplay(scene, gearX, gearY)) pinToScreen(part, 50);
+    this.gear = pinToScreen(gearNumber(scene, gearX, gearY, 0), 51);
 
     const label = scene.add.text(
       THERMOMETER.x,
@@ -173,7 +201,7 @@ export class Dashboard {
     if (options.hint) this.showHint(options.hint);
   }
 
-  /** Moves the knob to a gear's slot. */
+  /** Moves the knob to a gear's slot, and pops the new gear up in the gear display. */
   showGear(gear: number) {
     this.shownGear = gear;
     const [dx, dy] = GATE_SLOTS[gear]!;
@@ -186,6 +214,14 @@ export class Dashboard {
       duration: 90,
       ease: 'Quad.easeOut',
     });
+    this.gear.setText(gearLabel(gear));
+    this.scene.tweens.killTweensOf(this.gear);
+    this.scene.tweens.add({
+      targets: this.gear,
+      scale: { from: 1.3, to: 1 },
+      duration: 180,
+      ease: 'Back.easeOut',
+    });
   }
 
   update(dt: number, reading: DashboardReading) {
@@ -195,6 +231,14 @@ export class Dashboard {
     this.shownRpm += (reading.rpm + flutter - this.shownRpm) * Math.min(1, dt * 14);
     this.needle.setRotation(dialAngle(this.shownRpm));
     this.speed.setText(`${Math.round(reading.kmh)} km/h`);
+    // The gear turns amber while the engine labours (too high a gear) and red with the needle in
+    // the red (too low).
+    const gearColor =
+      reading.judder > 0 ? TEXT.low : reading.rpm >= RED_RPM ? TEXT.hot : TEXT.white;
+    if (gearColor !== this.gearColor) {
+      this.gearColor = gearColor;
+      this.gear.setColor(gearColor);
+    }
     this.drawThermometer(reading.heat);
 
     const secondsLeft = Math.ceil(reading.timeLeft);

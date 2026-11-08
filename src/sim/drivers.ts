@@ -1,4 +1,4 @@
-import { GEARS, rpmAt, targetSpeed, type Car } from './car';
+import { BUMP_GEAR, GEARS, rpmAt, slowingDistance, targetSpeed, type Car } from './car';
 import type { Road } from './road';
 import type { Driver } from './run';
 
@@ -31,6 +31,12 @@ export const CARELESS: DrivingStyle = {
 const STRUGGLE_RPM = 3200;
 /** Shortest time between two gear changes (s). */
 const MIN_SHIFT_INTERVAL = 0.3;
+/**
+ * The driver is in BUMP_GEAR this long before a speed bump (s), and at least this far before it
+ * (px) so that it doesn't change up again in between.
+ */
+const BUMP_LEAD_TIME = 0.5;
+const BUMP_HOLD_DISTANCE = 500;
 
 /** Drives by the revs: ?bot in the game, and the tests. */
 export class Bot implements Driver {
@@ -38,12 +44,14 @@ export class Bot implements Driver {
   private pending: number | null = null;
   private pendingFor = 0;
   private lastSpeed = 0;
+  /** The speed bump the driver has changed down for, until the car is over it. */
+  private bump: number | null = null;
 
   constructor(private readonly style: DrivingStyle = EXPERT) {}
 
   next(car: Car, road: Road, dt: number): number | null {
     this.sinceShift += dt;
-    const losingSpeed = car.v < this.lastSpeed - 2 * dt;
+    const losingSpeed = car.v < this.lastSpeed - 4 * dt;
     this.lastSpeed = car.v;
 
     const gear = this.choose(car, road, losingSpeed);
@@ -64,19 +72,31 @@ export class Bot implements Driver {
   private choose(car: Car, road: Road, losingSpeed: boolean): number | null {
     if (car.engine !== 'running') return null;
     const { upshiftRpm, downshiftRpm, anticipates } = this.style;
-    const slow = car.v < 15 && (car.clutchDown || car.pullingAway);
+    const slow = car.v < 30 && (car.clutchDown || car.pullingAway);
     if (car.gear === 0 || slow) return car.gear === 1 ? null : 1;
-    if (car.rpm > upshiftRpm && car.gear < GEARS) return car.gear + 1;
+    const topGear = this.bumpAhead(car, road) ? BUMP_GEAR : GEARS;
+    if (car.gear > topGear) return topGear;
+    if (car.rpm > upshiftRpm && car.gear < topGear) return car.gear + 1;
     if (car.gear > 1 && rpmAt(car.v, car.gear - 1) < upshiftRpm) {
       const struggling =
         anticipates &&
         losingSpeed &&
         car.throttle > 0.9 &&
-        car.v < targetSpeed(road, car.x) - 10 &&
+        car.v < targetSpeed(road, car.x) - 20 &&
         car.rpm < STRUGGLE_RPM;
       if (car.rpm < downshiftRpm || struggling) return car.gear - 1;
     }
     return null;
+  }
+
+  /** Whether it's time to be in BUMP_GEAR for a speed bump, and to stay there until over it. */
+  private bumpAhead(car: Car, road: Road) {
+    if (this.bump !== null && car.x > this.bump) this.bump = null;
+    const next = Math.min(...road.bumps.filter((bump) => bump > car.x));
+    const lead = this.style.reactionTime + BUMP_LEAD_TIME;
+    const needed = slowingDistance(car.v, BUMP_GEAR) + car.v * lead;
+    if (next - car.x < Math.max(needed, BUMP_HOLD_DISTANCE)) this.bump = next;
+    return this.bump !== null;
   }
 }
 

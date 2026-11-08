@@ -55,6 +55,7 @@ export const TEXT = {
   white: '#ffffff',
   coral: '#ff6b4a',
   cream: '#fff4c2',
+  low: '#ffa53f',
   hot: '#ff6a5a',
   dim: '#c9beb5',
 } as const;

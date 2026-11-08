@@ -10,6 +10,8 @@ export const CAR_ORIGIN = { x: CAR.cx / CAR.width, y: CAR.cy / CAR.height };
 /** Exhaust pipe and bonnet, relative to the point midway between the wheel centres. */
 export const EXHAUST = { x: -114, y: 2 };
 export const BONNET = { x: 84, y: -38 };
+/** The top of the roof, above the point midway between the wheel centres. */
+export const ROOF_HEIGHT = CAR.cy - 8;
 
 /** Draws every texture the game uses. There are no image files. */
 export function createTextures(scene: Phaser.Scene) {
@@ -66,21 +68,35 @@ export function createTextures(scene: Phaser.Scene) {
   g.fillRoundedRect(0, 92, 14, 7, 3);
   save('car', CAR.width, CAR.height);
 
-  // A wheel: tyre, hub and spokes, so it can be seen turning.
+  // A wheel: tyre, hub and spokes, so it can be seen turning. At speed the spokes blur into a ring.
   const r = WHEEL_RADIUS;
-  g.fillStyle(COLORS.tyre, 1);
-  g.fillCircle(r + 2, r + 2, r);
-  g.fillStyle(COLORS.hub, 1);
-  g.fillCircle(r + 2, r + 2, r * 0.5);
-  g.lineStyle(3, COLORS.outline, 1);
-  for (let i = 0; i < 5; i++) {
-    const a = (i / 5) * Math.PI * 2;
-    g.lineBetween(r + 2, r + 2, r + 2 + Math.cos(a) * r * 0.48, r + 2 + Math.sin(a) * r * 0.48);
+  const c = r + 2;
+  for (const blurred of [false, true]) {
+    g.fillStyle(COLORS.tyre, 1);
+    g.fillCircle(c, c, r);
+    g.fillStyle(COLORS.hub, 1);
+    g.fillCircle(c, c, r * 0.5);
+    if (blurred) {
+      g.lineStyle(5, COLORS.outline, 0.3);
+      g.strokeCircle(c, c, r * 0.3);
+    } else {
+      g.lineStyle(3, COLORS.outline, 1);
+      for (let i = 0; i < 5; i++) {
+        const a = (i / 5) * Math.PI * 2;
+        g.lineBetween(c, c, c + Math.cos(a) * r * 0.48, c + Math.sin(a) * r * 0.48);
+      }
+    }
+    g.lineStyle(3, COLORS.outline, 1);
+    g.strokeCircle(c, c, r * 0.5);
+    g.fillStyle(COLORS.outline, 1);
+    g.fillCircle(c, c, 3);
+    save(blurred ? 'wheelBlur' : 'wheel', r * 2 + 4, r * 2 + 4);
   }
-  g.strokeCircle(r + 2, r + 2, r * 0.5);
-  g.fillStyle(COLORS.outline, 1);
-  g.fillCircle(r + 2, r + 2, 3);
-  save('wheel', r * 2 + 4, r * 2 + 4);
+
+  // A streak of wind rushing past.
+  g.fillStyle(0xffffff, 1);
+  g.fillRoundedRect(0, 0, 120, 4, 2);
+  save('streak', 120, 4);
 
   // Smoke and steam (tinted when used), and a drop of mud.
   g.fillStyle(0xffffff, 0.5);

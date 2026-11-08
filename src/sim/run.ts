@@ -5,7 +5,7 @@ import type { Round } from './rounds';
 /** The simulation always advances in steps of this many seconds, whatever the frame rate. */
 export const FIXED_STEP = 1 / 60;
 
-export type Outcome = 'finished' | 'stalled' | 'blown' | 'late';
+export type Outcome = 'finished' | 'stalled' | 'blown' | 'crashed' | 'late';
 
 /** Something that picks gears: the bot, or a test driver. */
 export interface Driver {
@@ -52,8 +52,7 @@ export class RoundRun {
     this.car.step(dt, this.road);
 
     if (this.car.x >= this.road.finish) this.end('finished');
-    else if (this.car.engine === 'stalled') this.end('stalled');
-    else if (this.car.engine === 'blown') this.end('blown');
+    else if (this.car.engine !== 'running') this.end(this.car.engine);
     else if (this.elapsed >= this.round.timeLimit) this.end('late');
   }
 

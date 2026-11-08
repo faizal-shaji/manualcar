@@ -43,16 +43,16 @@ const menu = await openGame('');
 await menu.waitForTimeout(2500);
 await shoot('screenshot-1-menu.png', menu);
 
-// Round 12's 12% climb runs from x 4100 to 6100.
+// Round 12's 12% climb runs from x 8200 to 12200.
 const mountain = await openGame('?bot&speed=3&round=12');
-await mountain.waitForFunction(() => window.__manualcar!.x > 4650, null, LONG);
+await mountain.waitForFunction(() => window.__manualcar!.x > 9300, null, LONG);
 await shoot('screenshot-2-mountain.png', mountain);
 
 const redLight = await openGame('?bot&speed=2&round=9');
 await redLight.waitForFunction(
   () => {
     const s = window.__manualcar!;
-    return s.lights[0] === 'red' && s.v === 0 && s.x > 900;
+    return s.lights[0] === 'red' && s.v === 0 && s.x > 1800;
   },
   null,
   LONG,
@@ -73,9 +73,9 @@ await stalled.waitForFunction(() => window.__manualcar!.engine === 'stalled', nu
 await stalled.waitForTimeout(200);
 await shoot('screenshot-4-stalled.png', stalled);
 
-// Round 8's mud runs from x 2400 to 4800.
+// Round 8's mud runs from x 4800 to 9600.
 const mud = await openGame('?bot&speed=3&round=8');
-await mud.waitForFunction(() => window.__manualcar!.x > 3000, null, LONG);
+await mud.waitForFunction(() => window.__manualcar!.x > 6000, null, LONG);
 await shoot('screenshot-5-mud.png', mud);
 
 await browser.close();

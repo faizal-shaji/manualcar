@@ -1,4 +1,5 @@
 import Phaser from 'phaser';
+import { BUMP_GEAR, slowingDistance } from '../sim/car';
 import { Road, START_X, type TrafficLight } from '../sim/road';
 import { COLORS, HEIGHT, WIDTH } from './theme';
 import { drawPanel, pinToScreen, textStyle } from './ui';
@@ -8,6 +9,11 @@ const ROAD_THICKNESS = 26;
 /** Speed bump height and half width. */
 const BUMP_HEIGHT = 12;
 const BUMP_HALF_WIDTH = 32;
+/**
+ * The car stops with its middle about 90 px before a traffic light's position, which leaves its
+ * nose a little past it, so the stop line is drawn this much further on.
+ */
+const STOP_LINE_AHEAD = 32;
 
 // Depths: backdrop 0-3, scenery 5, posts and signs 5.5-5.7, the road 6.
 
@@ -111,10 +117,13 @@ export class RoadView {
     for (const { at, grade } of road.segments) {
       if (Math.abs(grade) < 5) continue;
       const kind = grade > 0 ? 'up' : 'down';
-      signs.push({ x: at - 260, place: (x) => this.warningSign(x, kind, `${Math.abs(grade)}%`) });
+      signs.push({ x: at - 520, place: (x) => this.warningSign(x, kind, `${Math.abs(grade)}%`) });
     }
     for (const bump of road.bumps) {
-      signs.push({ x: bump - 320, place: (x) => this.warningSign(x, 'bump') });
+      // Far enough ahead to change down for the bump in time, even from the speed limit.
+      const limit = road.limitAt(bump).speed;
+      const ahead = Math.max(640, slowingDistance(limit, BUMP_GEAR) + 300);
+      signs.push({ x: bump - ahead, place: (x) => this.warningSign(x, 'bump') });
     }
     signs.sort((a, b) => a.x - b.x);
     let last = -Infinity;
@@ -127,7 +136,7 @@ export class RoadView {
 
   private placeLights() {
     for (const light of this.road.lights) {
-      const x = light.at + 16;
+      const x = light.at + STOP_LINE_AHEAD + 16;
       const y = this.road.heightAt(x);
       this.post(x, y, 140);
       this.scene.add
@@ -210,9 +219,10 @@ export class RoadView {
       if (bump > x0 - BUMP_HALF_WIDTH && bump < x1 + BUMP_HALF_WIDTH) this.drawBump(bump);
     }
     for (const light of road.lights) {
-      if (light.at < x0 || light.at > x1) continue;
+      const x = light.at + STOP_LINE_AHEAD;
+      if (x < x0 || x > x1) continue;
       g.fillStyle(0xffffff, 1);
-      g.fillRect(light.at - 4, road.heightAt(light.at) + 2, 8, ROAD_THICKNESS - 4);
+      g.fillRect(x - 4, road.heightAt(x) + 2, 8, ROAD_THICKNESS - 4);
     }
     if (road.finish > x0 && road.finish < x1) this.drawFinishLine();
     g.lineStyle(4, COLORS.outline, 1);
@@ -287,7 +297,7 @@ export class RoadView {
       if (state === lamp.shown) continue;
       turnedGreen ||= state === 'green' && lamp.shown !== '';
       lamp.shown = state;
-      const x = lamp.light.at + 16;
+      const x = lamp.light.at + STOP_LINE_AHEAD + 16;
       const y = this.road.heightAt(x) - 132;
       const colors = [
         state === 'green' ? COLORS.lampOff : COLORS.red,

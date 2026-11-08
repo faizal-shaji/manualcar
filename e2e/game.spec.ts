@@ -81,13 +81,13 @@ test('pulling away in 3rd stalls and ends the round', async ({ page }) => {
   await page.waitForFunction(() => window.__manualcar!.phase === 'failed');
   const s = await snapshot(page);
   expect(s.outcome).toBe('stalled');
-  expect(s.x).toBeLessThan(START_X + 15);
+  expect(s.x).toBeLessThan(START_X + 30);
 });
 
 test('pulling away in 1st works', async ({ page }) => {
   await open(page, '?play&round=1');
   await page.keyboard.press('1');
-  await page.waitForFunction(() => window.__manualcar!.x > 260);
+  await page.waitForFunction(() => window.__manualcar!.x > 520);
   const s = await snapshot(page);
   expect(s.phase).toBe('driving');
   expect(s.engine).toBe('running');
@@ -124,14 +124,16 @@ test('the keys change gear', async ({ page }) => {
   expect(gears).toEqual(steps.map(([, gear]) => gear));
 });
 
-test('a gear far too low for the speed is refused', async ({ page }) => {
+test('a gear far too low for the speed goes in and slows the car down to it', async ({ page }) => {
   await open(page, '?play&round=2');
   await driveUpTo(page, 4);
   await page.waitForFunction(() => window.__manualcar!.kmh >= 75);
   await page.keyboard.press('1');
-  const s = await nextSnapshot(page);
-  expect(s.gear).toBe(4);
-  expect(s.refusedShifts).toBe(1);
+  expect((await nextSnapshot(page)).gear).toBe(1);
+  await page.waitForFunction(() => window.__manualcar!.kmh <= 31);
+  const s = await snapshot(page);
+  expect(s.engine).toBe('running');
+  expect(s.heat).toBe(0);
 });
 
 test.describe('the steep hill in round 5', () => {
@@ -149,12 +151,37 @@ test.describe('the steep hill in round 5', () => {
     await driveUpTo(page, 4);
     await page.waitForFunction(() => {
       const s = window.__manualcar!;
-      return s.x > 1800 && s.rpm < 2600;
+      return s.x > 3600 && s.rpm < 2600;
     });
     await page.keyboard.press('2');
     await page.waitForFunction(() => {
       const s = window.__manualcar!;
-      return s.x > 3500 || s.phase === 'failed';
+      return s.x > 7000 || s.phase === 'failed';
+    });
+    expect((await snapshot(page)).phase).toBe('driving');
+  });
+});
+
+test.describe('the speed bumps in round 6', () => {
+  test('flip the car taken too fast', async ({ page }) => {
+    await open(page, '?play&speed=2&round=6');
+    await driveUpTo(page, 3);
+    await page.waitForFunction(() => window.__manualcar!.phase === 'failed', null, {
+      timeout: 30_000,
+    });
+    const s = await snapshot(page);
+    expect(s.outcome).toBe('crashed');
+    expect(s.x).toBeGreaterThan(ROUNDS[5]!.bumps![0]!);
+  });
+
+  test('are taken in 2nd', async ({ page }) => {
+    await open(page, '?play&speed=2&round=6');
+    await driveUpTo(page, 4);
+    await page.waitForFunction(() => window.__manualcar!.x > 1600);
+    await page.keyboard.press('2');
+    await page.waitForFunction(() => {
+      const s = window.__manualcar!;
+      return s.x > 2400 || s.phase === 'failed';
     });
     expect((await snapshot(page)).phase).toBe('driving');
   });
@@ -166,7 +193,7 @@ test.describe('the red light in round 7', () => {
     await driveUpTo(page, 3);
     await page.waitForFunction(() => {
       const s = window.__manualcar!;
-      return s.lights[0] === 'red' && s.v === 0 && s.x > 1800;
+      return s.lights[0] === 'red' && s.v === 0 && s.x > 3600;
     });
   }
 
@@ -180,7 +207,7 @@ test.describe('the red light in round 7', () => {
   test('lets the car pull away on green in 1st', async ({ page }) => {
     await stopAtTheLight(page);
     await page.keyboard.press('1');
-    await page.waitForFunction(() => window.__manualcar!.x > 2100);
+    await page.waitForFunction(() => window.__manualcar!.x > 4200);
     expect((await snapshot(page)).phase).toBe('driving');
   });
 });

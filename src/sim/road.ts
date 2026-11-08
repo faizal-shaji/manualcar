@@ -2,14 +2,14 @@ import { KMH_PER_PX } from './car';
 import type { Round } from './rounds';
 
 /** The road's profile is sampled every SAMPLE_STEP px. */
-const SAMPLE_STEP = 4;
+const SAMPLE_STEP = 8;
 /** Hills are drawn this many times steeper than they pull, so they're easy to see coming. */
 export const DRAWN_STEEPNESS = 3;
 /** Roughly how far a change of grade is spread (px). */
-const GRADE_BLEND = 240;
+const GRADE_BLEND = 480;
 /** Where the car starts, and how much road there is past the finish line. */
-export const START_X = 160;
-const RUNOFF = 420;
+export const START_X = 320;
+const RUNOFF = 840;
 
 export interface SpeedLimit {
   /** Where the limit starts. */
@@ -22,7 +22,7 @@ export interface SpeedLimit {
 export type LightState = 'red' | 'amber' | 'green';
 
 export interface TrafficLight {
-  /** Position of the stop line. */
+  /** Position of the light. */
   at: number;
   /** Seconds the light stays red once the car is waiting at it. */
   redTime: number;
@@ -101,7 +101,7 @@ export class Road {
     for (const light of this.lights) {
       if (light.state === 'green') continue;
       const distance = light.at - car.x;
-      if (distance < 90 && distance > -10 && Math.abs(car.v) < 2) light.waited += dt;
+      if (distance < 180 && distance > -20 && Math.abs(car.v) < 4) light.waited += dt;
       if (light.waited >= light.redTime) light.state = 'green';
       else if (light.waited >= light.redTime - 0.7) light.state = 'amber';
     }

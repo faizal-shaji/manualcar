@@ -3,13 +3,15 @@
 A small browser game made for [GitHub Game Off 2026](https://itch.io/jam/game-off-2026), whose
 theme is **SHIFT**.
 
-The car drives itself. It speeds up to the limit and brakes for speed bumps and red lights. All you
-do is change gear:
+The car drives itself. It speeds up to the limit and stops at red lights. All you do is change
+gear:
 
 - **Too high a gear** and the engine lugs, judders and stalls. A stall ends the round.
 - **Too low a gear** and the car can't go any faster, so the clock runs out. Take a steep hill down
   in too low a gear and the engine over-revs until it blows.
-- **Only 1st pulls away**, and only 1st is slow enough for a speed bump.
+- **Only 1st pulls away**, so be in 1st when a red light turns green.
+- **The car doesn't slow down for speed bumps**, but a lower gear does. Over a bump faster than
+  55 km/h, the car flips: change down to 2nd before one.
 
 There are 15 rounds, each a road to the finish flag against the clock, with hills, mud, speed bumps,
 traffic lights, a town, a mountain road and rush hour.

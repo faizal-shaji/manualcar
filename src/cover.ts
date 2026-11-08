@@ -5,7 +5,15 @@
  * `window.__coverReady` is set.
  */
 import Phaser from 'phaser';
-import { dialAngle, drawGearGate, drawRevCounter, GATE_SLOTS, GearKnob } from './view/Dashboard';
+import {
+  dialAngle,
+  drawGearDisplay,
+  drawGearGate,
+  drawRevCounter,
+  GATE_SLOTS,
+  GearKnob,
+  gearNumber,
+} from './view/Dashboard';
 import './snapshot';
 import { waitForFont } from './view/fonts';
 import { CAR_ORIGIN, createTextures, EXHAUST, WHEEL_RADIUS, WHEELBASE } from './view/textures';
@@ -61,6 +69,8 @@ class CoverScene extends Phaser.Scene {
     cap.fillCircle(dial.x, dial.y, 12);
     cap.lineStyle(3, COLORS.outline, 1);
     cap.strokeCircle(dial.x, dial.y, 12);
+    drawGearDisplay(this, dial.x + 180, dial.y + 2);
+    gearNumber(this, dial.x + 180, dial.y + 2, 2);
     const gate = { x: 1066, y: 866 };
     drawGearGate(this, gate.x, gate.y);
     const [dx, dy] = GATE_SLOTS[2]!;

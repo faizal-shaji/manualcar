@@ -1,9 +1,13 @@
+import { GEARS } from './sim/car';
+
 /*
  * All sounds are synthesized with the Web Audio API. Browsers only allow audio after the first
  * click or key press, and starting a round is one.
  */
 
 const MUTE_KEY = 'manualcar.muted';
+/** The rush of wind and tyres is at its loudest from this speed. */
+const WIND_FULL_KMH = 140;
 
 let context: AudioContext | null = null;
 let muted = false;
@@ -71,15 +75,49 @@ function noise(
   source.start(a.currentTime + start);
 }
 
-/** The running engine: two oscillators at its firing frequency through a low-pass filter. */
+/** White noise to loop. */
+function noiseLoop(a: AudioContext, seconds: number) {
+  const buffer = a.createBuffer(1, Math.floor(a.sampleRate * seconds), a.sampleRate);
+  const data = buffer.getChannelData(0);
+  for (let i = 0; i < data.length; i++) data[i] = Math.random() * 2 - 1;
+  const source = a.createBufferSource();
+  source.buffer = buffer;
+  source.loop = true;
+  return source;
+}
+
+/**
+ * The running engine: a sawtooth at its firing frequency, a square wave an octave up for the rasp
+ * and a triangle an octave down for the rumble, through a low-pass filter. Beside it, filtered
+ * noise for the wind and the tyres.
+ */
 interface EngineNodes {
-  low: OscillatorNode;
-  high: OscillatorNode;
+  firing: OscillatorNode;
+  rasp: OscillatorNode;
+  rumble: OscillatorNode;
+  raspLevel: GainNode;
+  rumbleLevel: GainNode;
   filter: BiquadFilterNode;
+  /** Dips for a moment at each gear change. */
+  shiftDip: GainNode;
   gain: GainNode;
   /** Modulates the volume for the judder and the rev limiter. */
   wobble: OscillatorNode;
   wobbleDepth: GainNode;
+  wind: AudioBufferSourceNode;
+  windFilter: BiquadFilterNode;
+  windGain: GainNode;
+}
+
+export interface EngineReading {
+  rpm: number;
+  /** The throttle, from 0 to 1. */
+  load: number;
+  /** From 0 to 1. */
+  judder: number;
+  atLimiter: boolean;
+  gear: number;
+  kmh: number;
 }
 
 let engineNodes: EngineNodes | null = null;
@@ -88,55 +126,105 @@ export const engineSound = {
   start() {
     const a = audio();
     if (!a || engineNodes) return;
-    const low = a.createOscillator();
-    const high = a.createOscillator();
-    const mix = a.createGain();
+    const firing = a.createOscillator();
+    const rasp = a.createOscillator();
+    const rumble = a.createOscillator();
+    const raspLevel = a.createGain();
+    const rumbleLevel = a.createGain();
     const filter = a.createBiquadFilter();
+    const shiftDip = a.createGain();
     const gain = a.createGain();
     const wobble = a.createOscillator();
     const wobbleDepth = a.createGain();
-    low.type = 'sawtooth';
-    high.type = 'square';
-    mix.gain.value = 0.35;
+    firing.type = 'sawtooth';
+    rasp.type = 'square';
+    rumble.type = 'triangle';
+    raspLevel.gain.value = 0.35;
+    rumbleLevel.gain.value = 0.3;
     filter.type = 'lowpass';
     filter.Q.value = 2;
     filter.frequency.value = 500;
     gain.gain.value = 0;
     wobble.frequency.value = 8;
     wobbleDepth.gain.value = 0;
-    low.connect(filter);
-    high.connect(mix).connect(filter);
-    filter.connect(gain).connect(a.destination);
+    firing.connect(filter);
+    rasp.connect(raspLevel).connect(filter);
+    rumble.connect(rumbleLevel).connect(filter);
+    filter.connect(shiftDip).connect(gain).connect(a.destination);
     wobble.connect(wobbleDepth).connect(gain.gain);
-    low.start();
-    high.start();
-    wobble.start();
-    engineNodes = { low, high, filter, gain, wobble, wobbleDepth };
+
+    const wind = noiseLoop(a, 2);
+    const windFilter = a.createBiquadFilter();
+    const windGain = a.createGain();
+    windFilter.type = 'bandpass';
+    windFilter.Q.value = 0.7;
+    windGain.gain.value = 0;
+    wind.connect(windFilter).connect(windGain).connect(a.destination);
+
+    for (const source of [firing, rasp, rumble, wobble, wind]) source.start();
+    engineNodes = {
+      firing,
+      rasp,
+      rumble,
+      raspLevel,
+      rumbleLevel,
+      filter,
+      shiftDip,
+      gain,
+      wobble,
+      wobbleDepth,
+      wind,
+      windFilter,
+      windGain,
+    };
   },
 
-  /** Follows the engine: rpm, load (0 to 1), judder (0 to 1) and whether it's at the rev limiter. */
-  update(rpm: number, load: number, judder: number, atLimiter: boolean) {
+  /** Follows the engine and the road speed. */
+  update({ rpm, load, judder, atLimiter, gear, kmh }: EngineReading) {
     if (!engineNodes || !context) return;
+    const nodes = engineNodes;
     const t = context.currentTime;
     // A four-cylinder engine fires twice per revolution.
     const frequency = Math.max(14, rpm / 30);
-    engineNodes.low.frequency.setTargetAtTime(frequency, t, 0.03);
-    engineNodes.high.frequency.setTargetAtTime(frequency * 2.01, t, 0.03);
-    engineNodes.filter.frequency.setTargetAtTime(220 + rpm * 0.32 + load * 500, t, 0.05);
+    nodes.firing.frequency.setTargetAtTime(frequency, t, 0.03);
+    nodes.rasp.frequency.setTargetAtTime(frequency * 2.01, t, 0.03);
+    nodes.rumble.frequency.setTargetAtTime(frequency / 2, t, 0.03);
+    // The higher the gear, the deeper and smoother the note: more rumble, less rasp.
+    const tall = gear / GEARS;
+    nodes.rumbleLevel.gain.setTargetAtTime(0.3 + 0.5 * tall, t, 0.15);
+    nodes.raspLevel.gain.setTargetAtTime(0.35 - 0.15 * tall, t, 0.15);
+    const cutoff = 220 + rpm * (0.32 - 0.08 * tall) + load * 500;
+    nodes.filter.frequency.setTargetAtTime(cutoff, t, 0.05);
     const volume = 0.05 + load * 0.035 + (rpm / 7000) * 0.03;
-    engineNodes.gain.gain.setTargetAtTime(volume, t, 0.04);
-    engineNodes.wobble.frequency.setTargetAtTime(atLimiter ? 17 : 6 + judder * 5, t, 0.02);
+    nodes.gain.gain.setTargetAtTime(volume, t, 0.04);
+    nodes.wobble.frequency.setTargetAtTime(atLimiter ? 17 : 6 + judder * 5, t, 0.02);
     const depth = atLimiter ? volume * 0.9 : judder * volume * 0.85;
-    engineNodes.wobbleDepth.gain.setTargetAtTime(depth, t, 0.03);
+    nodes.wobbleDepth.gain.setTargetAtTime(depth, t, 0.03);
+    const rush = Math.min(1, kmh / WIND_FULL_KMH);
+    nodes.windFilter.frequency.setTargetAtTime(300 + rush * 1100, t, 0.1);
+    nodes.windGain.gain.setTargetAtTime(rush * rush * 0.07, t, 0.1);
+  },
+
+  /** A gear change: the throttle lifts and the clutch goes down for a moment. */
+  shift() {
+    if (!engineNodes || !context) return;
+    const dip = engineNodes.shiftDip.gain;
+    const t = context.currentTime;
+    dip.cancelScheduledValues(t);
+    dip.setValueAtTime(1, t);
+    dip.linearRampToValueAtTime(0.35, t + 0.04);
+    dip.linearRampToValueAtTime(1, t + 0.2);
   },
 
   stop() {
     if (!engineNodes || !context) return;
-    const { low, high, wobble, gain } = engineNodes;
+    const { firing, rasp, rumble, wobble, wind, gain, windGain } = engineNodes;
     const t = context.currentTime;
-    gain.gain.cancelScheduledValues(t);
-    gain.gain.setTargetAtTime(0, t, 0.05);
-    for (const oscillator of [low, high, wobble]) oscillator.stop(t + 0.4);
+    for (const level of [gain.gain, windGain.gain]) {
+      level.cancelScheduledValues(t);
+      level.setTargetAtTime(0, t, 0.05);
+    }
+    for (const source of [firing, rasp, rumble, wobble, wind]) source.stop(t + 0.4);
     engineNodes = null;
   },
 };
@@ -146,10 +234,30 @@ export const sfx = {
     noise(0.06, 0.16, 700, 0, 'lowpass');
     tone(150, 0, 0.07, 0.07, 'square', 90);
   },
-  /** A gear refused because the car is too fast for it. */
-  grind() {
-    noise(0.32, 0.2, 3200, 0, 'bandpass');
-    tone(190, 0, 0.3, 0.05, 'sawtooth', 150);
+  /** Exhaust pops as the throttle snaps shut at high revs. */
+  pops() {
+    noise(0.05, 0.18, 900, 0.03, 'lowpass');
+    noise(0.04, 0.12, 1100, 0.1, 'lowpass');
+    noise(0.04, 0.08, 800, 0.17, 'lowpass');
+  },
+  /** Tyres squealing as a gear far too low for the speed goes in. */
+  screech() {
+    noise(0.4, 0.12, 2500, 0, 'bandpass');
+    tone(1200, 0, 0.36, 0.03, 'triangle', 900);
+  },
+  /** A wheel going over a speed bump: a thud, harder the faster it goes. */
+  bump(kmh: number) {
+    const hard = Math.min(1, kmh / 55);
+    tone(90, 0, 0.12, 0.03 + hard * 0.09, 'sine', 50);
+    noise(0.08, 0.04 + hard * 0.16, 400, 0, 'lowpass');
+  },
+  /** Flipping over a speed bump: the hit, then the landing on the roof and the scrape after it. */
+  crash(landing: number) {
+    noise(0.25, 0.3, 900, 0, 'lowpass');
+    tone(130, 0, 0.2, 0.1, 'square', 70);
+    noise(0.6, 0.45, 700, landing, 'lowpass');
+    tone(85, landing, 0.45, 0.15, 'square', 32);
+    noise(0.9, 0.08, 3200, landing + 0.05, 'bandpass');
   },
   stall() {
     tone(80, 0, 0.4, 0.13, 'sawtooth', 28);

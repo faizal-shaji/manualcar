@@ -2,12 +2,12 @@ import Phaser from 'phaser';
 import { engineSound, sfx } from '../audio';
 import { progress } from '../progress';
 import type { Phase } from '../snapshot';
-import { GEARS, KMH_PER_PX, type CarEvent } from '../sim/car';
+import { GEAR_TOP_SPEED, GEARS, KMH_PER_PX, rpmAt, type CarEvent } from '../sim/car';
 import { Bot } from '../sim/drivers';
 import { START_X } from '../sim/road';
 import { LAST_ROUND, ROUNDS, type Round } from '../sim/rounds';
 import { FIXED_STEP, RoundRun, type Outcome } from '../sim/run';
-import { CarView } from '../view/CarView';
+import { CarView, TUMBLE_TIME } from '../view/CarView';
 import { Dashboard } from '../view/Dashboard';
 import { RoadView } from '../view/RoadView';
 import { COLORS, HEIGHT, TEXT, WIDTH } from '../view/theme';
@@ -15,12 +15,15 @@ import { button, drawPanel, outlinedText, pinToScreen, textStyle } from '../view
 
 /** Seconds before the clock starts. The round's name shows, and a gear can already go in. */
 const READY_TIME = 1.2;
-/** Where the car sits on the screen. */
+/** Where the car sits on the screen when it stands still. */
 const CAR_SCREEN_X = 330;
 const CAR_SCREEN_Y = 410;
+/** At top speed the car sits this much further left, showing more of the road ahead. */
+const CAMERA_LEAD = 80;
+/** Changing up from above these revs pops the exhaust. */
+const POPS_RPM = 4800;
 /** A round's hint shows for this many tries. */
 const HINT_TRIES = 3;
-const GEAR_NAMES = ['neutral', '1st', '2nd', '3rd', '4th', '5th'];
 
 type Failure = Exclude<Outcome, 'finished'>;
 
@@ -36,6 +39,10 @@ const FAILURES: Record<Failure, { title: string; text: string }> = {
   blown: {
     title: 'Engine blown!',
     text: 'Down a steep hill in too low a gear,\nthe engine spun far past the red.\nChange up on the way down.',
+  },
+  crashed: {
+    title: 'Crashed!',
+    text: 'Over a speed bump too fast,\nthe car flipped. Change down to 2nd\nbefore a bump to slow it down.',
   },
 };
 
@@ -54,7 +61,6 @@ export class GameScene extends Phaser.Scene {
   private phase: Phase = 'ready';
   private readyTime = 0;
   private accumulator = 0;
-  private refusedShifts = 0;
   private lastCountdown = 0;
   private leaving = false;
   private humming = false;
@@ -78,7 +84,6 @@ export class GameScene extends Phaser.Scene {
     this.phase = 'ready';
     this.readyTime = 0;
     this.accumulator = 0;
-    this.refusedShifts = 0;
     this.lastCountdown = 0;
     this.leaving = false;
     this.humming = false;
@@ -154,6 +159,11 @@ export class GameScene extends Phaser.Scene {
     else this.countDown();
   }
 
+  /** Where the car sits across the screen: further left the faster it goes. */
+  private carScreenX() {
+    return CAR_SCREEN_X - (CAMERA_LEAD * Math.abs(this.run.car.v)) / GEAR_TOP_SPEED[GEARS];
+  }
+
   /** Where the camera looks: the road under the car, and a little of what's ahead. */
   private cameraFocus() {
     const { car, road } = this.run;
@@ -165,22 +175,32 @@ export class GameScene extends Phaser.Scene {
     const camera = this.cameras.main;
     const moved = car.x - this.lastCarX;
     this.lastCarX = car.x;
+    const kmh = Math.abs(car.v) * KMH_PER_PX;
     const bumpHeightAt = (x: number) => this.roadView.bumpHeightAt(x);
-    this.carView.update(dt, car, road, bumpHeightAt, this.humming && !this.leaving);
-    camera.scrollX = car.x - CAR_SCREEN_X;
+    if (this.carView.update(dt, car, road, bumpHeightAt, this.humming && !this.leaving)) {
+      sfx.bump(kmh);
+    }
+    camera.scrollX = car.x - this.carScreenX();
     camera.scrollY += (this.cameraFocus() - CAR_SCREEN_Y - camera.scrollY) * Math.min(1, dt * 3);
     if (this.roadView.update(dt, moved)) sfx.lightGreen();
     this.dashboard.update(dt, {
       rpm: car.rpm,
       atLimiter: car.atLimiter,
-      kmh: Math.abs(car.v) * KMH_PER_PX,
+      judder: car.judder,
+      kmh,
       heat: car.heat,
       timeLeft: this.run.timeLeft,
       progress: Phaser.Math.Clamp((car.x - START_X) / (road.finish - START_X), 0, 1),
     });
     if (this.humming) {
-      const rpm = car.engine === 'running' ? car.rpm : 0;
-      engineSound.update(rpm, car.throttle, car.judder, car.atLimiter);
+      engineSound.update({
+        rpm: car.engine === 'running' ? car.rpm : 0,
+        load: car.throttle,
+        judder: car.judder,
+        atLimiter: car.atLimiter,
+        gear: car.gear,
+        kmh,
+      });
     }
   }
 
@@ -209,21 +229,26 @@ export class GameScene extends Phaser.Scene {
   private changeGear(gear: number) {
     if (this.phase !== 'ready' && this.phase !== 'driving') return;
     gear = Phaser.Math.Clamp(gear, 0, GEARS);
-    const car = this.run.car;
-    if (gear === car.gear) return;
-    if (!car.shift(gear)) {
-      this.refusedShifts++;
-      sfx.grind();
-      this.say(`Too fast for ${GEAR_NAMES[gear]}!`, TEXT.hot);
-      this.cameras.main.shake(120, 0.004);
-      return;
-    }
+    if (gear === this.run.car.gear) return;
+    this.run.car.shift(gear);
     this.showGearChange();
   }
 
+  /**
+   * A gear change, the player's or the bot's: a clunk, pops for a change up at high revs, squealing
+   * tyres for a gear far too low for the speed, and the new gear on the dashboard.
+   */
   private showGearChange() {
+    const car = this.run.car;
+    const from = this.dashboard.shownGear;
     sfx.gearIn();
-    this.dashboard.showGear(this.run.car.gear);
+    engineSound.shift();
+    if (car.gear > from && from > 0 && rpmAt(car.v, from) > POPS_RPM) sfx.pops();
+    if (car.slowingToGear) {
+      sfx.screech();
+      this.cameras.main.shake(140, 0.004);
+    }
+    this.dashboard.showGear(car.gear);
   }
 
   // Events and endings
@@ -234,10 +259,14 @@ export class GameScene extends Phaser.Scene {
       sfx.stall();
       this.say('Stalled!', TEXT.hot);
       this.carView.smokeBurst(true);
-    } else {
+    } else if (event === 'blown') {
       sfx.bang();
       this.cameras.main.shake(350, 0.012);
       this.say('BANG!', TEXT.hot);
+    } else {
+      sfx.crash(TUMBLE_TIME);
+      this.cameras.main.shake(200, 0.008);
+      this.say('CRASH!', TEXT.hot);
     }
   }
 
@@ -275,8 +304,9 @@ export class GameScene extends Phaser.Scene {
       this.time.delayedCall(500, () => this.retry());
       return;
     }
-    // Let a stalled car roll back, or the smoke clear, before the card.
-    this.time.delayedCall(failure === 'late' ? 800 : 1300, () => {
+    // Let a stalled car roll back, the smoke clear or a flipped car land before the card.
+    const delay = { late: 800, stalled: 1300, blown: 1300, crashed: 1800 }[failure];
+    this.time.delayedCall(delay, () => {
       this.stopEngineSound();
       const { title, text } = FAILURES[failure];
       this.showCard(title, text, [
@@ -372,7 +402,6 @@ export class GameScene extends Phaser.Scene {
       elapsed: Math.round(elapsed * 10) / 10,
       timeLimit: this.round.timeLimit,
       lights: road.lights.map((light) => light.state),
-      refusedShifts: this.refusedShifts,
       unlockedRound: progress.unlockedRound,
       completedAll: progress.completedAll,
     };

@@ -5,16 +5,17 @@ import type { Road } from './road';
  * temperature. Nothing here draws anything.
  *
  * The player only picks gears. Everything else is automatic: the throttle holds the speed limit,
- * the brakes slow the car for lower limits, speed bumps and red lights, and the clutch is used to
- * stop and to pull away. Distances are in px along the road, speeds in px/s and accelerations in
- * px/s².
+ * the brakes slow the car for lower limits and red lights, and the clutch is used to stop, to pull
+ * away and to let in a gear too low for the speed. Speed bumps are the player's: the car doesn't
+ * slow down for them, and over one too fast it flips. Distances are in px along the road, speeds in
+ * px/s and accelerations in px/s².
  */
 
 /** Speed at the rev limiter in each gear. Index 0 is neutral. */
-export const GEAR_TOP_SPEED = [0, 100, 166.7, 233.3, 350, 483.3] as const;
+export const GEAR_TOP_SPEED = [0, 200, 333.4, 466.6, 700, 966.6] as const;
 export const GEARS = 5;
 /** Converts px/s to the km/h shown on the dashboard. */
-export const KMH_PER_PX = 0.3;
+export const KMH_PER_PX = 0.15;
 
 export const IDLE_RPM = 850;
 /** In gear with the clutch up, the engine stalls after STALL_TIME below this. */
@@ -30,8 +31,6 @@ export const LIMIT_RPM = 6500;
  * steep descent in too low a gear can do. The engine overheats there.
  */
 export const OVERREV_RPM = 6700;
-/** A downshift that would spin the engine faster than this is refused. */
-export const MAX_SHIFT_RPM = 7600;
 /** Full scale of the rev counter. */
 export const DIAL_MAX_RPM = 7000;
 /** Engine speed while the clutch slips during a pull-away. */
@@ -42,23 +41,34 @@ const PULL_AWAY_RPM = 1400;
 // 3rd 10%, 2nd 14% and 1st 25%.
 
 /** Drive at peak torque in 5th. Lower gears multiply it by their ratio. */
-const DRIVE = 35;
-const ROLLING_RESISTANCE = 10;
+const DRIVE = 70;
+const ROLLING_RESISTANCE = 20;
 /** Aerodynamic drag, times v². */
-const DRAG = 1.5e-4;
+const DRAG = 7.5e-5;
 /** Pull of a 100% grade. */
-const GRAVITY = 625;
+const GRAVITY = 1250;
 /** Extra resistance in mud, about the same as an 8% climb. */
-export const MUD_RESISTANCE = 50;
+export const MUD_RESISTANCE = 100;
 /** Traction limit. */
-const MAX_ACCEL = 60;
+const MAX_ACCEL = 120;
 /** Deceleration the driver uses to slow down for something ahead. */
-export const COMFORT_DECEL = 100;
-const MAX_BRAKE = 500;
+export const COMFORT_DECEL = 200;
+const MAX_BRAKE = 1000;
 /** Engine braking off the throttle in 5th. Lower gears multiply it by their ratio. */
-const ENGINE_BRAKE = 10;
-/** Speed for crossing a speed bump (6 km/h): slow enough to stall anything but 1st. */
-export const BUMP_SPEED = 20;
+const ENGINE_BRAKE = 20;
+/**
+ * Engine braking in 5th while the clutch slips to let in a gear too low for the speed. Lower gears
+ * multiply it by their ratio, so dropping to 1st at speed slows the car hard.
+ */
+const DOWNSHIFT_BRAKE = 100;
+/**
+ * Over a speed bump faster than this (55 km/h), the car flips. BUMP_GEAR tops out below it, so
+ * changing down to it slows the car enough.
+ */
+export const BUMP_CRASH_SPEED = 366.7;
+export const BUMP_GEAR = 2;
+/** Deceleration of a car sliding on its roof. */
+const ROOF_FRICTION = 450;
 
 const STALL_TIME = 0.5;
 /** Once the engine stops, the car rolls freely for this long before the brake goes on. */
@@ -101,7 +111,7 @@ export const rpmAt = (v: number, gear: number) =>
 
 /**
  * The speed the automatic driver aims for at x: the speed limit, lowered in time for a lower
- * limit, a speed bump or a red light ahead.
+ * limit or a red light ahead.
  */
 export function targetSpeed(road: Road, x: number): number {
   const approach = (speed: number, at: number) =>
@@ -110,19 +120,23 @@ export function targetSpeed(road: Road, x: number): number {
   for (const limit of road.limits) {
     if (limit.at > x) target = Math.min(target, approach(limit.speed, limit.at));
   }
-  for (const bump of road.bumps) {
-    if (x < bump + 30) target = Math.min(target, approach(BUMP_SPEED, bump - 60));
-  }
   for (const light of road.lights) {
     if (light.state === 'green' || x > light.at) continue;
-    // Close to the line it stops rather than creeping up to it.
-    target = Math.min(target, light.at - x < 60 ? 0 : approach(0, light.at - 8));
+    // Close to the light it stops rather than creeping up to it.
+    target = Math.min(target, light.at - x < 120 ? 0 : approach(0, light.at - 16));
   }
   return target;
 }
 
-export type EngineState = 'running' | 'stalled' | 'blown';
-export type CarEvent = 'stalled' | 'blown';
+/** How far a gear too low for speed v takes to slow the car down to that gear's top speed. */
+export function slowingDistance(v: number, gear: number) {
+  const top = GEAR_TOP_SPEED[gear]!;
+  return v > top ? (v * v - top * top) / (2 * DOWNSHIFT_BRAKE * gearRatio(gear)) : 0;
+}
+
+/** Running, or what stopped the engine. */
+export type EngineState = 'running' | 'stalled' | 'blown' | 'crashed';
+export type CarEvent = Exclude<EngineState, 'running'>;
 
 export class Car {
   x: number;
@@ -141,6 +155,11 @@ export class Car {
   clutchDown = true;
   /** Pulling away from a standstill with the clutch slipping. */
   pullingAway = false;
+  /**
+   * A gear too low for the speed has gone in: the clutch slips while the engine brakes the car
+   * down to that gear's top speed.
+   */
+  slowingToGear = false;
   /** Brake to a standstill and stay there. */
   stopping = false;
   /** What happened during the last step. */
@@ -155,18 +174,13 @@ export class Car {
     this.x = x;
   }
 
-  /**
-   * Selects a gear (0 is neutral). Returns false and keeps the current gear if the engine isn't
-   * running or would over-rev.
-   */
-  shift(gear: number): boolean {
+  /** Selects a gear (0 is neutral). Any gear goes in at any speed. */
+  shift(gear: number) {
     gear = Math.max(0, Math.min(GEARS, Math.round(gear)));
-    if (gear === this.gear) return true;
-    if (this.engine !== 'running') return false;
-    if (gear > 0 && rpmAt(this.v, gear) > MAX_SHIFT_RPM) return false;
+    if (gear === this.gear) return;
     this.gear = gear;
     this.lugTime = 0;
-    return true;
+    this.slowingToGear = rpmAt(this.v, gear) > LIMIT_RPM;
   }
 
   step(dt: number, road: Road) {
@@ -181,15 +195,17 @@ export class Car {
     if (this.engine === 'running') {
       this.updateClutch(target);
       // Standing still with the clutch down: foot on the brake.
-      if (this.clutchDown && Math.abs(this.v) < 20) brake = MAX_BRAKE;
-      this.throttle = this.clutchDown ? 0 : Math.max(0, Math.min(1, (target - this.v) / 4));
+      if (this.clutchDown && Math.abs(this.v) < 40) brake = MAX_BRAKE;
+      this.throttle = this.clutchDown ? 0 : Math.max(0, Math.min(1, (target - this.v) / 8));
       drive = this.engineDrive(dt);
       if (this.engine === 'running') this.updateHeat(dt);
     } else {
       // Engine off: the car rolls on for a moment (backwards on a hill), then the brake holds it.
+      // Upside down, it slides to a stop.
       this.rpm = Math.max(0, this.rpm - dt * 5000);
       this.offTime += dt;
-      brake = this.offTime > ROLL_AFTER_STOP_TIME ? MAX_BRAKE : 0;
+      if (this.engine === 'crashed') brake = ROOF_FRICTION;
+      else brake = this.offTime > ROLL_AFTER_STOP_TIME ? MAX_BRAKE : 0;
     }
 
     // Drive and gravity first, then every resistance, which can stop the car but never reverse
@@ -201,18 +217,22 @@ export class Car {
     v -= Math.sign(v) * DRAG * v * v * dt;
     v = v > 0 ? Math.max(0, v - resistance * dt) : Math.min(0, v + resistance * dt);
     this.v = Math.min(v, this.v + MAX_ACCEL * dt);
+    const from = this.x;
     this.x = Math.max(0, this.x + this.v * dt);
+    const overBump = road.bumps.some((bump) => from < bump && bump <= this.x);
+    if (overBump && this.v > BUMP_CRASH_SPEED) this.stopEngine('crashed');
   }
 
   /** Clutch down in neutral and to stop; up again once rolling, or slipping to pull away. */
   private updateClutch(target: number) {
-    if (this.gear === 0 || (target < 1 && this.v < 30)) {
+    if (this.gear === 0 || (target < 2 && this.v < 60)) {
       this.clutchDown = true;
       this.pullingAway = false;
+      this.slowingToGear = false;
     } else if (this.clutchDown) {
       if (rpmAt(this.v, this.gear) >= PULL_AWAY_RPM) {
         this.clutchDown = false;
-      } else if (target > this.v + 1) {
+      } else if (target > this.v + 2) {
         this.clutchDown = false;
         this.pullingAway = true;
         this.lurchTime = 0;
@@ -240,7 +260,7 @@ export class Car {
       }
       this.rpm = Math.max(wheelRpm, PULL_AWAY_RPM);
       if (wheelRpm >= PULL_AWAY_RPM) this.pullingAway = false;
-      if (this.v < -6) {
+      if (this.v < -12) {
         this.rollbackTime += dt;
         if (this.rollbackTime > ROLLBACK_STALL_TIME) this.stall();
       } else {
@@ -248,11 +268,20 @@ export class Car {
       }
       return DRIVE * gearRatio(gear) * torqueAt(this.rpm) * Math.max(this.throttle, 0.6);
     }
+    if (this.slowingToGear) {
+      if (rpmAt(this.v, gear) > LIMIT_RPM) {
+        // The engine sits at the rev limiter and brakes the car through the slipping clutch.
+        this.rpm = LIMIT_RPM;
+        this.atLimiter = true;
+        return -DOWNSHIFT_BRAKE * gearRatio(gear);
+      }
+      this.slowingToGear = false;
+    }
 
     // In gear with the clutch up: the engine turns with the wheels.
     this.rpm = rpmAt(this.v, gear);
     let drive: number;
-    if (this.v < -6) {
+    if (this.v < -12) {
       this.stall();
       drive = 0;
     } else if (this.rpm >= LIMIT_RPM) {
@@ -292,6 +321,7 @@ export class Car {
     this.offTime = 0;
     this.lugTime = 0;
     this.pullingAway = false;
+    this.slowingToGear = false;
     this.clutchDown = true;
     this.events.push(state);
   }

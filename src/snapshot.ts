@@ -20,7 +20,6 @@ export interface GameSnapshot {
   elapsed: number;
   timeLimit: number;
   lights: LightState[];
-  refusedShifts: number;
   unlockedRound: number;
   completedAll: boolean;
 }
