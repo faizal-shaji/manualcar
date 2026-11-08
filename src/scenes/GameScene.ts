@@ -50,7 +50,8 @@ const FAILURES: Record<Failure, { title: string; text: string }> = {
  * One round: a road to drive before the clock runs out. The car drives itself (src/sim); the
  * player only changes gear, with the keys or by tapping the gear stick.
  *
- * URL flags: ?round=N starts round N, ?bot lets the bot drive, ?speed=N runs N times faster.
+ * URL flags for testing, on the dev server only: ?round=N starts round N, ?bot lets the bot drive
+ * and ?speed=N runs N times faster.
  */
 export class GameScene extends Phaser.Scene {
   private round!: Round;
@@ -75,7 +76,7 @@ export class GameScene extends Phaser.Scene {
   }
 
   init(data: { round?: number; tries?: number }) {
-    const params = new URLSearchParams(location.search);
+    const params = new URLSearchParams(import.meta.env.DEV ? location.search : '');
     this.autopilot = params.has('bot');
     this.speed = Phaser.Math.Clamp(Number(params.get('speed')) || 1, 1, 10);
     const requested = data.round ?? (Number(params.get('round')) || progress.unlockedRound);
